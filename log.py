@@ -17,14 +17,14 @@ def base_dir():
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
-def configurar_logger(nome="Backup_Mercosistem"):
+def configurar_logger(nome="Migracao_Firebird"):
     """
     Configura o sistema de log da aplicação. 
-    Cria automaticamente uma pasta 'LOGS_BACKUP_MERCOSISTEM' e gera arquivos 
+    Cria automaticamente uma pasta 'LOGS_MIGRACAO_MERCOSISTEM' e gera arquivos 
     diários para facilitar a manutenção e auditoria dos backups.
     """
     base = base_dir()
-    pasta_logs = os.path.join(base, "LOGS_BACKUP_MERCOSISTEM")
+    pasta_logs = os.path.join(base, "LOGS_MIGRACAO_MERCOSISTEM")
     
     # Garante que a pasta de logs exista antes de tentar criar o arquivo
     os.makedirs(pasta_logs, exist_ok=True)

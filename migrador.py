@@ -58,9 +58,9 @@ portas_firebird = capturar_portas_firebird()
 
 bases = obter_bases(empresa_db, portas_firebird) if empresa_db.lower().endswith("empresa.gdb") else [empresa_db]
 
-PASTA_RAIZ = "backup_Restore"
-PASTA_BACKUP = os.path.join(PASTA_RAIZ, "backup")
-PASTA_RESTORE = os.path.join(PASTA_RAIZ, "restore")
+PASTA_RAIZ = "Migracao_Firebird"
+PASTA_BACKUP = os.path.join(PASTA_RAIZ, "backup2_5")
+PASTA_RESTORE = os.path.join(PASTA_RAIZ, "restore3_0")
 
 os.makedirs(PASTA_BACKUP, exist_ok=True)
 os.makedirs(PASTA_RESTORE, exist_ok=True)
@@ -75,7 +75,9 @@ def matar_atualizador():
         "DataSnap.exe",
         "IntegradorECommerce.exe",
         "PreVenda.exe",
-        "Caixa.exe"
+        "Caixa.exe",
+        "ReplServer.exe",
+        "ReplServer.exe"
     ]
     try:
         si = subprocess.STARTUPINFO()
@@ -98,14 +100,29 @@ def matar_atualizador():
 
 
 def buscar_cod_empresa(dsn):
-    """ Conecta ao banco Firebird para buscar o número de série da empresa (usado no nome do arquivo). """
-    conn = fdb.connect(dsn=dsn, user=FB_USER, password=FB_PASS)
-    cur = conn.cursor()
-    cur.execute("SELECT FIRST 1 NUMSERIE FROM EMPRESA")
-    row = cur.fetchone()
-    conn.close()
-    log.info(f"Código da empresa encontrado: {row[0] if row and row[0] else 'N/A'}")
-    return re.sub(r"[^0-9\-]", "", str(row[0])) if row and row[0] else None
+    """Busca o NUMSERIE apenas se for GESTAO.FDB."""
+    # Extrai o nome do arquivo do DSN
+    nome_arquivo = os.path.basename(dsn.split(":")[-1]).upper()
+
+    if "GESTAO.FDB" not in nome_arquivo:
+        log.info(f"Banco {nome_arquivo} não possui NUMSERIE. Usando DESCONHECIDO.")
+        return "DESCONHECIDO"
+
+    try:
+        conn = fdb.connect(dsn=dsn, user=FB_USER, password=FB_PASS)
+        cur = conn.cursor()
+        cur.execute("SELECT FIRST 1 NUMSERIE FROM EMPRESA")
+        row = cur.fetchone()
+        conn.close()
+
+        codigo = re.sub(r"[^0-9\-]", "", str(row[0])) if row and row[0] else None
+        log.info(f"Código da empresa encontrado: {codigo if codigo else 'DESCONHECIDO'}")
+        return codigo or "DESCONHECIDO"
+
+    except Exception as e:
+        log.warning(f"Não foi possível obter NUMSERIE do banco {nome_arquivo}: {e}")
+        return "DESCONHECIDO"
+
 
 def compactar_fbk(fbk_file):
     """Compacta o .fbk em formato ZIP."""
@@ -190,8 +207,21 @@ def restaurar_no_fb30(fbk_path, destino_fdb):
             destino_fdb
         ], check=True, startupinfo=si)
 
+        if any(x in fbk_path.upper() for x in ["EMPRESA.GDB", "REPLICADOR.FDB"]):
+            log.info(f"FBK mantido (não excluído): {fbk_path}")
+        else:
+            try:
+                os.remove(fbk_path)
+                log.info(f"FBK removido após restore: {fbk_path}")
+            except Exception as e:
+                log.warning(f"Não foi possível remover o FBK: {e}")
+
         log.info("Restore no Firebird 3.0 concluído com sucesso!")
         return True
+
+    except Exception as e:
+        log.error(f"Erro no restore FB 3.0: {e}", exc_info=True)
+        return False
 
     except Exception as e:
         log.error(f"Erro no restore FB 3.0: {e}", exc_info=True)
@@ -210,9 +240,10 @@ def rodar_backup(callback_progresso):
 
     for idx, dsn in enumerate(bases):
         inicio_cronometro = time.time()
-        cod_empresa = buscar_cod_empresa(dsn) or "DESCONHECIDO"
 
         try:
+            cod_empresa = buscar_cod_empresa(dsn) or "DESCONHECIDO"
+
             progresso_base = idx / total_bases
             incremento_etapa = 1.0 / total_bases / 3  # agora são 3 etapas
 
@@ -236,7 +267,6 @@ def rodar_backup(callback_progresso):
             subprocess.run([
                 gbak_path,
                 "-b",
-                "-g",
                 "-ig",
                 "-l",
                 "-user", FB_USER,
@@ -244,7 +274,7 @@ def rodar_backup(callback_progresso):
                 dsn,
                 fbk
             ], check=True, startupinfo=si)
-
+            
             callback_progresso(progresso_base + incremento_etapa)
             log.info("Backup físico (.fbk) gerado com sucesso.")
 
@@ -267,9 +297,12 @@ def rodar_backup(callback_progresso):
             log.info(f"Enviando arquivo para o FTP da empresa {cod_empresa}...")
 
             enviar_ftp(zip_fbk, cod_empresa)
-            if os.path.exists(zip_fbk):
+            if os.path.exists(zip_fbk) and not any(x in zip_fbk.upper() for x in ["EMPRESA.GDB", "REPLICADOR.FDB"]):
                 os.remove(zip_fbk)
                 log.info("ZIP removido após envio FTP.")
+            else:
+                log.info(f"ZIP mantido (não excluído): {zip_fbk}")
+
 
             callback_progresso(progresso_base + (incremento_etapa * 3))
             log.info("Upload concluído!")

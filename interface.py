@@ -17,7 +17,7 @@ def mostrar_loading(funcao_background):
     """
     root = ctk.CTk()
     
-    path_icone = resource_path("merco.ico")
+    path_icone = resource_path("migradorb.ico")
     try:
         root.after(200, lambda: root.iconbitmap(path_icone))
     except:

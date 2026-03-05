@@ -82,11 +82,12 @@ def conectar_firebird(host, porta, banco, user, senha):
     dsn = f"{host}/{porta}:{banco}"
     return fdb.connect(dsn=dsn, user=user, password=senha)
 
+bases = []
+
 def obter_bases(empresa_db, portas_firebird):
     """
-    Tenta conexão no banco mestre (EMPRESA.GDB) testando todas as portas encontradas.
-    Uma vez conectado, lê a tabela 'EMPRESA' para listar todos os outros bancos ativos
-    que precisam sofrer backup.
+    Conecta no EMPRESA.GDB testando todas as portas, lista os bancos ativos
+    e normaliza todos para DSN (127.0.0.1/porta: caminho).
     """
     ultimo_erro = None
 
@@ -103,23 +104,47 @@ def obter_bases(empresa_db, portas_firebird):
 
             cur = conn.cursor()
             log.info("Conexão bem-sucedida EMPRESA.GDB. Buscando bases de dados ativas...")
-            # Busca o caminho de todas as bases de dados cadastradas e ativas no sistema
+
+            # Busca caminhos dos bancos ativos
             cur.execute("SELECT e.caminho FROM EMPRESA e WHERE e.ATIVO = 1")
             bases = [row[0] for row in cur.fetchall()]
 
             conn.close()
             log.info(f"Conectado com sucesso na porta {porta}")
+
+            # Adiciona replicador se existir
+            pasta_empresa = os.path.dirname(empresa_db)
+            replicador = os.path.join(pasta_empresa, "replicador.fdb")
+            if os.path.exists(replicador):
+                bases.insert(0, replicador)
+
+            # Adiciona EMPRESA.GDB se não estiver
+            if empresa_db not in bases:
+                bases.insert(0, empresa_db)
+
+            log.info(f"Bases para backup antes de normalizar DSN: {bases}")
+
+            # Normaliza todas as bases para DSN com host/porta
+            bases_final = []
+            for b in bases:
+            # Se já começa com host/porta, mantém
+                if re.match(r"^(127\.0\.0\.1|localhost)/\d+:", b, re.IGNORECASE):
+                    bases_final.append(b)
+                else:
+            # Caso contrário, adiciona localhost e a porta que funcionou
+                    bases_final.append(f"127.0.0.1/{porta}:{b}")
+            bases = bases_final
+            log.info(f"Bases para backup final (DSN): {bases}")
+
             return bases
 
         except Exception as e:
             ultimo_erro = e
             log.error(f"Falha na porta {porta}: {e}")
 
-    # Se exaurir todas as portas e não conectar, propaga o erro
     if ultimo_erro:
         raise ultimo_erro
-    return []
-
+    raise Exception("Não foi possível conectar a nenhuma porta Firebird.")
 # =================================================================
 # TESTE ISOLADO
 # =================================================================
