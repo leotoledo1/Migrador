@@ -7,8 +7,9 @@ from dotenv import load_dotenv
 from retrocompatibilidade import configurar_retrocompatibilidade, reiniciar_servico_firebird
 
 # --- GERENCIAMENTO DE RECURSOS ---
+
 def resource_path(relative_path):
-    """ 
+    """
     Ajusta o caminho dos arquivos (como o .env) para que funcionem 
     tanto rodando o script .py quanto rodando o executável (.exe) gerado pelo PyInstaller.
     """
@@ -16,23 +17,23 @@ def resource_path(relative_path):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 
-# Carrega as variáveis de ambiente sensíveis (senhas e hosts)
+# Carregamento das configurações de ambiente
 caminho_env = resource_path(".env")
 if os.path.exists(caminho_env):
     load_dotenv(caminho_env)
 else:
     raise Exception("Erro crítico: Arquivo .env não encontrado.")
 
-# Captura das credenciais via variáveis de ambiente
+# Definição de credenciais capturadas do ambiente
 FTP_HOST = os.getenv("FTP_HOST")
 FTP_USER = os.getenv("FTP_USER")
 FTP_PASS_PREFIX = os.getenv("FTP_PASS_PREFIX")
 FB_USER = os.getenv("FB_USER")
 FB_PASS = os.getenv("FB_PASS")
 
-# Importações de módulos locais do projeto
+# Importações de módulos internos do sistema
 from encontrar_gbak import gbak_path
-from emcontrar_caminho import caminho_base, encontrar_banco_base, capturar_portas_firebird, obter_bases
+from emcontrar_caminho import caminho_base, encontrar_banco_base, capturar_portas_firebird, extrair_emp_do_dsn, obter_bases
 from log_discord import enviar_log_discord
 import fdb
 import re 
@@ -44,45 +45,48 @@ from desinstalar import desinstalar_firebird_25
 from desinstalar import parar_servico_firebird
 from encontrar_gbak3_0 import encontrar_gbak_30
 
+# Inicialização do logger para rastreamento de eventos
 log = configurar_logger()
 
-# --- PREPARAÇÃO DO AMBIENTE ---
-# Define bases e pastas onde os arquivos temporários de backup serão gerados
+# --- PREPARAÇÃO DO AMBIENTE E MAPEAMENTO DE BASES ---
+
 base = caminho_base()
 empresa_db = encontrar_banco_base(base)
 
+# Validação da existência do banco principal
 if not empresa_db:
     raise Exception("Nenhum banco base encontrado (EMPRESA.GDB ou GESTAO.FDB)")
 
 portas_firebird = capturar_portas_firebird()
 
+# Identifica se é uma migração multi-base (GDB) ou base única (FDB)
 bases = obter_bases(empresa_db, portas_firebird) if empresa_db.lower().endswith("empresa.gdb") else [empresa_db]
 
+# Estrutura de diretórios para arquivos temporários de migração
 PASTA_RAIZ = "Migracao_Firebird"
 PASTA_BACKUP = os.path.join(PASTA_RAIZ, "backup2_5")
 PASTA_RESTORE = os.path.join(PASTA_RAIZ, "restore3_0")
 
 os.makedirs(PASTA_BACKUP, exist_ok=True)
 os.makedirs(PASTA_RESTORE, exist_ok=True)
+
 log.info(f"Pasta de backup: {PASTA_BACKUP}")
 log.info(f"Pasta de restore: {PASTA_RESTORE}")
 
 def matar_atualizador():
-    """Encerra processos que podem travar o acesso exclusivo ao banco de dados."""
+    """
+    Finaliza processos ativos do ERP e serviços auxiliares para garantir
+    acesso exclusivo ao banco de dados durante o backup e migração.
+    """
     processos = [
-        "atualizador.exe",
-        "Gestao.exe",
-        "DataSnap.exe",
-        "IntegradorECommerce.exe",
-        "PreVenda.exe",
-        "Caixa.exe",
-        "ReplServer.exe",
+        "atualizador.exe", "Gestao.exe", "DataSnap.exe",
+        "IntegradorECommerce.exe", "PreVenda.exe", "Caixa.exe",
         "ReplServer.exe"
     ]
     try:
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        si.wShowWindow = subprocess.SW_HIDE  # Executa sem abrir janela do CMD
+        si.wShowWindow = subprocess.SW_HIDE  
 
         for processo in processos:
             subprocess.run(
@@ -92,16 +96,16 @@ def matar_atualizador():
                 check=False,
                 startupinfo=si
             )
-
         log.info("Processos finalizados (se estavam em execução).")
-
     except Exception as e:
         log.warning(f"Erro ao tentar finalizar processos: {e}")
 
 
 def buscar_cod_empresa(dsn):
-    """Busca o NUMSERIE apenas se for GESTAO.FDB."""
-    # Extrai o nome do arquivo do DSN
+    """
+    Conecta ao banco de dados para extrair o código de série da empresa (NUMSERIE).
+    Aplicável apenas para bases GESTAO.FDB.
+    """
     nome_arquivo = os.path.basename(dsn.split(":")[-1]).upper()
 
     if "GESTAO.FDB" not in nome_arquivo:
@@ -118,15 +122,15 @@ def buscar_cod_empresa(dsn):
         codigo = re.sub(r"[^0-9\-]", "", str(row[0])) if row and row[0] else None
         log.info(f"Código da empresa encontrado: {codigo if codigo else 'DESCONHECIDO'}")
         return codigo or "DESCONHECIDO"
-
     except Exception as e:
         log.warning(f"Não foi possível obter NUMSERIE do banco {nome_arquivo}: {e}")
         return "DESCONHECIDO"
 
 
 def compactar_fbk(fbk_file):
-    """Compacta o .fbk em formato ZIP."""
-
+    """
+    Compacta o arquivo de backup (.fbk) em formato .zip para otimizar o envio via FTP.
+    """
     base_name, _ = os.path.splitext(fbk_file)
     zip_name = base_name + ".zip"
 
@@ -136,11 +140,13 @@ def compactar_fbk(fbk_file):
         root_dir=os.path.dirname(fbk_file),
         base_dir=os.path.basename(fbk_file)
     )
-
     return zip_name
 
 def enviar_ftp(zip_name, codigo_empresa):
-    """ Realiza o upload do arquivo compactado para o servidor FTP da empresa. """
+    """
+    Realiza o upload do backup compactado para o servidor FTP centralizado.
+    Gera a senha dinamicamente baseada na data atual.
+    """
     try:
         senha = FTP_PASS_PREFIX + datetime.now().strftime("%d%m%y")
         ftp = ftplib.FTP(FTP_HOST)
@@ -156,6 +162,9 @@ def enviar_ftp(zip_name, codigo_empresa):
         log.error(f"Erro ao enviar FTP (empresa {codigo_empresa})", exc_info=True)
 
 def instalar_firebird_30():
+    """
+    Executa o instalador do Firebird 3.0 de forma silenciosa via subprocess.
+    """
     try:
         caminho_instalador = resource_path(
             os.path.join("instaladorfb30", "Firebird3.0.exe")
@@ -179,12 +188,15 @@ def instalar_firebird_30():
 
         log.info("Firebird 3.0 instalado com sucesso!")
         return True
-
     except Exception as e:
         log.error(f"Erro ao instalar Firebird 3.0: {e}")
         return False
     
 def restaurar_no_fb30(fbk_path, destino_fdb):
+    """
+    Realiza o restore de um arquivo .fbk para o formato Firebird 3.0 (.FDB).
+    Utiliza o gbak da versão 3.0 para garantir a conversão estrutural.
+    """
     gbak_30 = encontrar_gbak_30()
 
     if not gbak_30:
@@ -197,6 +209,7 @@ def restaurar_no_fb30(fbk_path, destino_fdb):
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         si.wShowWindow = subprocess.SW_HIDE
 
+        # Comando de restore com definição de tamanho de página e credenciais
         subprocess.run([
             gbak_30,
             "-c",
@@ -207,6 +220,7 @@ def restaurar_no_fb30(fbk_path, destino_fdb):
             destino_fdb
         ], check=True, startupinfo=si)
 
+        # Limpeza: Remove o FBK após restore bem-sucedido (exceto bases críticas)
         if any(x in fbk_path.upper() for x in ["EMPRESA.GDB", "REPLICADOR.FDB"]):
             log.info(f"FBK mantido (não excluído): {fbk_path}")
         else:
@@ -218,42 +232,36 @@ def restaurar_no_fb30(fbk_path, destino_fdb):
 
         log.info("Restore no Firebird 3.0 concluído com sucesso!")
         return True
-
     except Exception as e:
         log.error(f"Erro no restore FB 3.0: {e}", exc_info=True)
         return False
-
-    except Exception as e:
-        log.error(f"Erro no restore FB 3.0: {e}", exc_info=True)
-        return False
-    
 
 def rodar_backup(callback_progresso):
     """
-    Executa o ciclo:
-    1. Backup (.fbk)
-    2. Compactação (.zip)
-    3. Upload FTP
+    Orquestra o ciclo de backup para todas as bases identificadas:
+    1. Execução do GBAK (Backup físico)
+    2. Compactação ZIP
+    3. Upload para o FTP
     """
-
     total_bases = len(bases)
 
     for idx, dsn in enumerate(bases):
         inicio_cronometro = time.time()
-
         try:
             cod_empresa = buscar_cod_empresa(dsn) or "DESCONHECIDO"
 
+            # Cálculos para barra de progresso na interface
             progresso_base = idx / total_bases
-            incremento_etapa = 1.0 / total_bases / 3  # agora são 3 etapas
+            incremento_etapa = 1.0 / total_bases / 3 
 
             log.info(f"Iniciando processamento da base: {dsn}")
             callback_progresso(progresso_base)
 
-            # Nome do arquivo
+            # Geração do nome do arquivo baseado em data e empresa
             nome_base = os.path.basename(dsn.split(":")[-1]).replace(".FDB", "")
             data = datetime.now().strftime("%Y%m%d_%H%M%S")
-            nome_arquivo = f"{nome_base}_{cod_empresa}_{data}"
+            emp = extrair_emp_do_dsn(dsn)
+            nome_arquivo = f"{nome_base}_{emp}_{cod_empresa}_{data}"
 
             fbk = os.path.join(PASTA_BACKUP, f"{nome_arquivo}.fbk")
 
@@ -261,14 +269,11 @@ def rodar_backup(callback_progresso):
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             si.wShowWindow = subprocess.SW_HIDE
 
-            # 🔥 1️⃣ BACKUP
+            # --- ETAPA 1: BACKUP ---
             log.info(f"Executando GBAK Backup para: {fbk}")
-
             subprocess.run([
                 gbak_path,
-                "-b",
-                "-ig",
-                "-l",
+                "-b", "-ig", "-l",
                 "-user", FB_USER,
                 "-password", FB_PASS,
                 dsn,
@@ -278,10 +283,9 @@ def rodar_backup(callback_progresso):
             callback_progresso(progresso_base + incremento_etapa)
             log.info("Backup físico (.fbk) gerado com sucesso.")
 
-            # 🔥 2️⃣ COMPACTAÇÃO DO FBK
+            # --- ETAPA 2: COMPACTAÇÃO ---
             log.info("Compactando arquivo FBK...")
             zip_fbk = fbk.replace(".fbk", ".zip")
-
             shutil.make_archive(
                 zip_fbk.replace(".zip", ""),
                 "zip",
@@ -289,41 +293,33 @@ def rodar_backup(callback_progresso):
                 base_dir=os.path.basename(fbk)
             )
 
-
             callback_progresso(progresso_base + (incremento_etapa * 2))
             log.info(f"Compactação finalizada: {zip_fbk}")
 
-            # 🔥 3️⃣ ENVIO FTP
+            # --- ETAPA 3: ENVIO FTP ---
             log.info(f"Enviando arquivo para o FTP da empresa {cod_empresa}...")
-
             enviar_ftp(zip_fbk, cod_empresa)
+            
+            # Remove o ZIP após sucesso para economizar espaço em disco
             if os.path.exists(zip_fbk) and not any(x in zip_fbk.upper() for x in ["EMPRESA.GDB", "REPLICADOR.FDB"]):
                 os.remove(zip_fbk)
                 log.info("ZIP removido após envio FTP.")
             else:
                 log.info(f"ZIP mantido (não excluído): {zip_fbk}")
 
-
             callback_progresso(progresso_base + (incremento_etapa * 3))
             log.info("Upload concluído!")
             
-            tempo_total_segundos = time.time() - inicio_cronometro
-            minutos = int(tempo_total_segundos // 60)
-            segundos = int(tempo_total_segundos % 60)
-
         except Exception as e:
             log.error(f"Erro no processamento da base {dsn}: {e}", exc_info=True)
-
-            tempo_total_segundos = time.time() - inicio_cronometro
-            minutos = int(tempo_total_segundos // 60)
-            segundos = int(tempo_total_segundos % 60)
-
 
     callback_progresso(1.0)
 
 
-
 def migrar_firebird():
+    """
+    Gerencia a transição de software: para, desinstala a v2.5 e instala a v3.0.
+    """
     log.info("Parando Firebird 2.5...")
     parar_servico_firebird()
 
@@ -337,6 +333,7 @@ def migrar_firebird():
         log.error("Falha ao instalar Firebird 3.0.")
         return False
 
+    # Configura aliases e bibliotecas de legado se necessário
     if configurar_retrocompatibilidade():
         reiniciar_servico_firebird()
         return True
@@ -345,6 +342,10 @@ def migrar_firebird():
 
 
 def processo_completo(callback):
+    """
+    Fluxo principal do software:
+    Kill Processos -> Backup 2.5 -> Instalação 3.0 -> Restore para 3.0 -> Logs
+    """
     log.info("Finalizando processos...")
     matar_atualizador()
 
@@ -353,55 +354,46 @@ def processo_completo(callback):
     log.info("BACKUP FINALIZADO")
 
     log.info("INICIANDO MIGRAÇÃO PARA 3.0")
-
     if not migrar_firebird():
         log.critical("Falha na migração estrutural.")
         return
 
     log.info("Migração estrutural concluída.")
 
-    # RESTORE
+    # Itera sobre os backups gerados para realizar o restore na nova versão
     for arquivo in os.listdir(PASTA_BACKUP):
         if arquivo.endswith(".fbk"):
             fbk_path = os.path.join(PASTA_BACKUP, arquivo)
             destino = os.path.join(PASTA_RESTORE, arquivo.replace(".fbk", "_fb30.FDB"))
+            
             inicio_restore = time.time()
             sucesso = restaurar_no_fb30(fbk_path, destino)
-
 
             tempo_restore = time.time() - inicio_restore
             minutos = int(tempo_restore // 60)
             segundos = int(tempo_restore % 60)
+
+            # Notificação de status via webhook do Discord
             if sucesso:
-                try:
-                    os.remove(fbk_path)
-                    log.info(f"FBK removido após restore com sucesso: {fbk_path}")
-                except Exception as e:
-                    log.warning(f"Não foi possível remover o FBK: {e}")
-                
                 enviar_log_discord(
                     status="sucesso",
                     codigo_empresa="GERAL",
                     mensagem="✅ Restore concluído com sucesso",
-                    detalhes=(
-                        f"Base restaurada:\n{os.path.basename(destino)}\n"
-                        f"Tempo: {minutos}m {segundos}s"
+                    detalhes=f"Base restaurada:\n{os.path.basename(destino)}\nTempo: {minutos}m {segundos}s"
                 )
-                    )
             else:
                 enviar_log_discord(
                     status="erro",
                     codigo_empresa="GERAL",
                     mensagem="❌ Falha no restore",
-                    detalhes=(
-                        f"Base com erro:\n{os.path.basename(fbk_path)}\n"
-                        f"Tempo da tentativa: {minutos}m {segundos}s"
-                )                    )
+                    detalhes=f"Base com erro:\n{os.path.basename(fbk_path)}\nTempo: {minutos}m {segundos}s"
+                )
 
     log.info("PROCESSO COMPLETO FINALIZADO")
 
 if __name__ == "__main__":
     try:
+        # Inicia a interface visual de carregamento passando o fluxo principal
         mostrar_loading(processo_completo)
     except Exception as e:
         log.critical(f"Erro geral no processo principal: {e}", exc_info=True)

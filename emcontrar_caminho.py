@@ -145,6 +145,25 @@ def obter_bases(empresa_db, portas_firebird):
     if ultimo_erro:
         raise ultimo_erro
     raise Exception("Não foi possível conectar a nenhuma porta Firebird.")
+
+def extrair_emp_do_dsn(dsn):
+    """
+    Extrai emp1, emp2, emp3 de um DSN tipo:
+    127.0.0.1/3050:C:\\gestao\\emp1\\gestao.fdb
+    """
+    try:
+        caminho = dsn.split(":")[-1]
+
+        match = re.search(r"(emp\d+)", caminho.lower())
+        if match:
+            return match.group(1)
+
+        return "emp_desconhecido"
+
+    except Exception as e:
+        log.warning(f"Erro ao extrair EMP do DSN {dsn}: {e}")
+        return "emp_desconhecido"
+
 # =================================================================
 # TESTE ISOLADO
 # =================================================================
