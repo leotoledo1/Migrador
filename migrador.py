@@ -311,15 +311,6 @@ def rodar_backup(callback_progresso):
             minutos = int(tempo_total_segundos // 60)
             segundos = int(tempo_total_segundos % 60)
 
-            enviar_log_discord(
-                status="sucesso",
-                codigo_empresa=cod_empresa,
-                mensagem=f"Migrado com sucesso 3.0 {nome_base}",
-                detalhes=(
-                    f"Empresa: {cod_empresa}\n"
-                    f"Tempo: {minutos}m {segundos}s\n" )    
-            )
-
         except Exception as e:
             log.error(f"Erro no processamento da base {dsn}: {e}", exc_info=True)
 
@@ -327,12 +318,6 @@ def rodar_backup(callback_progresso):
             minutos = int(tempo_total_segundos // 60)
             segundos = int(tempo_total_segundos % 60)
 
-            enviar_log_discord(
-                status="erro",
-                codigo_empresa=cod_empresa,
-                mensagem=f"❌ Falha no backup: {nome_base}",
-                detalhes=f"⏱️ Tentativa durou: {minutos}m {segundos}s\n⚠️ Erro: {str(e)}"
-            )
 
     callback_progresso(1.0)
 
@@ -380,15 +365,39 @@ def processo_completo(callback):
         if arquivo.endswith(".fbk"):
             fbk_path = os.path.join(PASTA_BACKUP, arquivo)
             destino = os.path.join(PASTA_RESTORE, arquivo.replace(".fbk", "_fb30.FDB"))
-
+            inicio_restore = time.time()
             sucesso = restaurar_no_fb30(fbk_path, destino)
 
+
+            tempo_restore = time.time() - inicio_restore
+            minutos = int(tempo_restore // 60)
+            segundos = int(tempo_restore % 60)
             if sucesso:
                 try:
                     os.remove(fbk_path)
                     log.info(f"FBK removido após restore com sucesso: {fbk_path}")
                 except Exception as e:
                     log.warning(f"Não foi possível remover o FBK: {e}")
+                
+                enviar_log_discord(
+                    status="sucesso",
+                    codigo_empresa="GERAL",
+                    mensagem="✅ Restore concluído com sucesso",
+                    detalhes=(
+                        f"Base restaurada:\n{os.path.basename(destino)}\n"
+                        f"Tempo: {minutos}m {segundos}s"
+                )
+                    )
+            else:
+                enviar_log_discord(
+                    status="erro",
+                    codigo_empresa="GERAL",
+                    mensagem="❌ Falha no restore",
+                    detalhes=(
+                        f"Base com erro:\n{os.path.basename(fbk_path)}\n"
+                        f"Tempo da tentativa: {minutos}m {segundos}s"
+                )                    )
+
     log.info("PROCESSO COMPLETO FINALIZADO")
 
 if __name__ == "__main__":
