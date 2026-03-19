@@ -213,7 +213,7 @@ def restaurar_no_fb30(fbk_path, destino_fdb):
         subprocess.run([
             gbak_30,
             "-c",
-            "-p", "4096",
+            "-p", "8192",
             "-user", FB_USER,
             "-password", FB_PASS,
             fbk_path,
