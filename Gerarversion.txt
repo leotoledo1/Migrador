@@ -1,1 +1,1 @@
-pyinstaller --noconsole --onefile --uac-admin --collect-all requests --version-file file_version_info.txt --add-data "migradorb.ico;." --add-data ".env;." --add-data "instaladorfb30;instaladorfb30" --icon="migradorb.ico" --name "MigradoMercosistem" migrador.py
+pyinstaller --noconsole --onefile --uac-admin --collect-all requests --version-file file_version_info.txt --add-data "migradorb.ico;." --add-data ".env;." --add-data "instaladorfb30;instaladorfb30" --add-data "dlls_fb3;dlls_fb3" --icon="migradorb.ico" --name "MigradoMercosistem" migrador.py

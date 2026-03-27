@@ -4,6 +4,7 @@ from datetime import datetime
 import sys
 import time
 from dotenv import load_dotenv
+from dll_3_0 import semear_dependencias_fb3
 from retrocompatibilidade import configurar_retrocompatibilidade, reiniciar_servico_firebird
 
 # --- GERENCIAMENTO DE RECURSOS ---
@@ -388,6 +389,19 @@ def processo_completo(callback):
                     mensagem="❌ Falha no restore",
                     detalhes=f"Base com erro:\n{os.path.basename(fbk_path)}\nTempo: {minutos}m {segundos}s"
                 )
+    
+    log.info("FINALIZANDO: Semeando DLLs Client nas pastas do ERP e Sistema...")
+    
+    try:
+        # 'base' é o caminho_base() detectado no início do script
+        if semear_dependencias_fb3(base):
+            log.info(" DLLs distribuídas com sucesso em todas as pastas.")
+        else:
+            log.warning("A semeadura terminou com avisos (verifique os logs).")
+    except Exception as e:
+        log.error(f"Erro crítico na semeadura final: {e}")
+
+    log.info("=== PROCESSO COMPLETO FINALIZADO COM SUCESSO ===")
 
     log.info("PROCESSO COMPLETO FINALIZADO")
 
